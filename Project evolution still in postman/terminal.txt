@@ -1,0 +1,478 @@
+Auth.py :
+
+import re
+from dbapp import db
+from models import User
+from flask_jwt_extended import create_access_token
+
+def registering(email,password,role):
+
+    if (not email or not password or not role):
+        return ({"success":False, "Error":" you cant leave the required fields as empty "})
+    
+    existing_user=User.query.filter_by(email=email).first()
+
+    if (existing_user):
+        return ({"success":False, "Error":" user already exists "})
+
+    def Email(email):
+        pattern=r"^[a-zA-Z0-9.+_%-]+@[a-zA-Z0-9.-]+\.[a-zA-z]{2,}$"
+        return (bool(re.match(pattern,email)))
+    
+    check=Email(email)
+
+    if(not check):
+        return ({"success":False, "Error":" please enter a valid email address "})
+    
+    def PassWord(password):
+        pattern=r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!*%&?])[A-Za-z\d@$!%*?&]{8,}$"
+        return (bool(re.match(pattern,password)))
+    
+    check=PassWord(password)
+
+    if(not check):
+        return ({"success":False, "Error":" Your password is too weak. It must be at least 8 characters long and include a mix of lowercase (a-z), uppercase (A-Z), numbers (0-9), and special symbols ( . + _ % - # )."})
+    
+    new_user=User(email=email,role=role)
+
+    new_user.set_password(password)
+    
+    db.session.add(new_user)
+    db.session.commit()
+    return ({"success":True, "Message":f" {role} successfully registered "})
+
+
+
+def logingin(email,password):
+
+    if (not email or not password):
+        return ({"success":False, "Error":" Email and Password required "})
+    
+    user_exists=User.query.filter_by(email=email).first()
+
+    if( not user_exists):
+        return ({"success":False, "Error":"Invalid credentials-Email"})
+    
+    if (not user_exists.check_password(password)):
+        return ({"success":False,"Error":"Invalid credentials-password"})
+    
+
+    additional_tokens={"role":user_exists.role}
+
+    access_token=create_access_token(identity=str(user_exists.id),additional_claims=additional_tokens)
+
+    return ({"success":True, "access_token":access_token}) 
+
+models.py :
+
+from dbapp import db
+from datetime import datetime
+from sqlalchemy import Enum
+from werkzeug.security import generate_password_hash, check_password_hash
+
+
+class User(db.Model):
+
+    __tablename__="users"
+    id=db.Column(db.Integer, primary_key=True)
+    email=db.Column(db.String(100), unique=True, nullable=False)
+    password_hash=db.Column(db.String(255), nullable=False)
+    role=db.Column(Enum("applicant", "admin","recruiter", name="role_enum"), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    jobs_created = db.relationship("Job", backref="recruiter",lazy=True)
+    
+    applications = db.relationship("Application", backref="applicant",lazy=True)
+
+    def set_password(self,password):
+         self.password_hash=generate_password_hash(password)
+
+    def check_password(self,password):
+         return check_password_hash(self.password_hash,password)
+    
+class Job(db.Model):
+     
+     __tablename__="jobs"
+     id=db.Column(db.Integer, primary_key=True)
+     company_name = db.Column(db.String(100), nullable=False)
+     title=db.Column(db.String(50), nullable=False)
+     description=db.Column(db.Text, nullable=False)
+     skills = db.Column(db.Text, nullable=False)
+     salary=db.Column(db.Integer, nullable=True)
+     job_type = db.Column(Enum("remote","hybrid","onsite",name="job_type_enum"), nullable=False)
+     location=db.Column(db.String(100), nullable=False)
+     created_at=db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+     recruiter_id=db.Column(db.Integer, db.ForeignKey("users.id"),nullable=False)
+     applications = db.relationship("Application", backref="job", lazy=True)
+
+class Application(db.Model):
+     
+     __tablename__="applications"
+     id=db.Column(db.Integer, primary_key=True)
+     applicant_id=db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+     job_id = db.Column( db.Integer, db.ForeignKey("jobs.id"),nullable=False)
+     resume_filename = db.Column( db.String(255), nullable=False)
+
+     status = db.Column(
+        Enum(
+            "pending",
+            "reviewed",
+            "accepted",
+            "rejected",
+            name="application_status_enum"
+        ),
+        default="pending",
+        nullable=False)
+
+     applied_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        nullable=False )
+     
+     __table_args__ = (
+     db.UniqueConstraint(
+        "applicant_id",
+        "job_id",
+        name="unique_application"), )
+
+
+backendflask.py :
+
+import os
+from dbapp import db
+from auth.auth import registering,logingin
+from flask import Flask,jsonify,request
+from services.operations import JobsCreation, ListAppliedJobs, ApplyJobs, Listjobs, DeleteJob
+from flask_jwt_extended import JWTManager, jwt_required, get_jwt, get_jwt_identity
+
+
+app=Flask(__name__)
+
+DATABASE_URL=os.environ.get("DATABASE_URL")
+
+if not DATABASE_URL:
+    DATABASE_URL = "sqlite:///JobPortal.db"
+
+app.config["SQLALCHEMY_DATABASE_URI"]=DATABASE_URL
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"]=False
+app.config["JWT_SECRET_KEY"]=("JWT_SECRET_KEY_THIS_IS_MY_SECRET_KEY_FOR_MY_JOB_PORTAL_PROJECT")
+db.init_app(app)
+jwt=JWTManager(app)
+
+with app.app_context():
+    db.create_all()
+
+
+
+@app.route("/")
+def home():
+    return jsonify({"success":True, "Project":"Job Portal Project", "Status":"Running","Developer":"Ram Siddharth"}),200
+
+
+@app.route("/register",methods=["POST"])
+def registration():
+    data=request.get_json()
+
+    regi=registering(data.get("email"), data.get("password"), role="applicant") 
+    
+    return (jsonify(regi), 201) if regi["success"] else (jsonify(regi), 400)
+
+
+@app.route("/admin/register",methods=["POST"])
+@jwt_required()
+def AdminRegistration():
+
+    data=request.get_json()
+    claims=get_jwt()
+    Role=claims.get("role")
+    if (Role!="admin"):
+        return jsonify({"success":False, "Error":"Access denied"}),403
+
+    regi=registering(data.get("email"), data.get("password"), role="admin") 
+    
+    return (jsonify(regi), 201) if regi["success"] else (jsonify(regi), 400)
+
+
+@app.route("/recruiter/register",methods=["POST"])
+@jwt_required()
+def RecruiterRegistration():
+
+    data=request.get_json()
+    claims=get_jwt()
+    Role=claims.get("role")
+    if (Role!="admin"):
+        return jsonify({"success":False, "Error":"Access denied"}),403
+
+    regi=registering(data.get("email"), data.get("password"), role="recruiter") 
+    
+    return (jsonify(regi), 201) if regi["success"] else (jsonify(regi), 400)
+
+
+
+@app.route("/login",methods=["POST"])
+def login():
+    data=request.get_json()
+    email=data.get("email")
+    password=data.get("password")
+    log=logingin(email,password)
+
+    if (not email or not password ):
+        return ({"success":False, "Error":" Email and password required "}),400
+    
+    return (jsonify(log), 200) if log["success"] else (jsonify(log), 401)
+
+
+@app.route("/createjobs", methods=["POST"])
+@jwt_required()
+def createjobs():
+    data=request.get_json()
+    claims=get_jwt()
+    Role=claims.get("role")
+    identity=get_jwt_identity()
+    if Role not in ["recruiter", "admin"]:
+        return jsonify({"success":False, "Error":"Access denied"}),403
+    
+    newjob=JobsCreation(data.get("company_name"), data.get("title"), data.get("description"), data.get("skills"), data.get("salary"), data.get("job_type"), data.get("location"), identity, Role)
+
+    return (jsonify(newjob), 201) if newjob["success"] else (jsonify(newjob), 400)
+
+@app.route("/listjobs")
+def AllJobsList():
+    listthejobs=Listjobs()
+    return (jsonify(listthejobs),200) if listthejobs["success"] else (jsonify(listthejobs),404)
+
+
+
+@app.route("/applyjob", methods=["POST"])
+@jwt_required()
+def ApplyForAJob():
+    claims=get_jwt()
+    Role=claims.get("role")
+    identity=get_jwt_identity()
+
+    if (Role!="applicant"):
+        return jsonify({"success":False, "Error":"Access denied"}),403
+    
+    job_id=request.form.get("job_id")
+    resume=request.files.get("resume")
+
+    applied=ApplyJobs(Role,identity,job_id,resume)
+
+    return (jsonify(applied),200) if applied["success"] else (jsonify(applied),404)
+
+    
+
+@app.route("/listappliedjob")
+@jwt_required()
+def ListAppliedJob():
+    claims=get_jwt()
+    Role=claims.get("role")
+    identity=get_jwt_identity()
+
+    if (Role!="applicant"):
+        return jsonify({"success":False, "Error":"Access denied"}),403
+    
+    ListAppliedJob=ListAppliedJobs(Role,identity)
+    return (jsonify(ListAppliedJob),200) if ListAppliedJob["success"] else (jsonify(ListAppliedJob),404)
+
+
+@app.route("/remove/job", methods=["DELETE"])
+@jwt_required()
+def DeleteAJob():
+    claims=get_jwt()
+    data=request.get_json()
+    Role=claims.get("role")
+    identity=get_jwt_identity()
+
+    if Role not in ["recruiter", "admin"]:
+        return jsonify({"success":False, "Error":"Access denied"}),403
+    
+    DeleteAJob=DeleteJob(Role, identity, data.get("title"), data.get("company name"))
+
+    return (jsonify(DeleteAJob),200) if DeleteAJob["success"] else (jsonify(DeleteAJob),404)  
+
+
+
+operations.py :
+
+import os
+from dbapp import db
+from datetime import datetime
+from models import Job, Application
+from werkzeug.utils import secure_filename
+from validators.jobvalidator import job_validation
+
+def JobsCreation(company_name, title, description, skills, salary, job_type, location, identity, Role):
+
+    if (Role!="recruiter"):
+        return ({"success":False, "Error":"Access denied"})
+        
+    data = { "company_name": company_name, "title": title, "description": description, "skills": skills,"salary": salary,"job_type": job_type, "location": location}
+
+    validate=job_validation(data)
+
+    if (not validate["success"]):
+        return (validate)
+    
+    try:
+        newjob=Job(company_name=company_name, title=title, description=description, skills=skills, salary=salary, job_type=job_type, location=location, recruiter_id=identity)
+        db.session.add(newjob)
+        db.session.commit()
+
+        return({"success":True, "message":"A new job has been successfully completed"})
+
+    except Exception as e:
+        db.session.rollback()
+        return({"success":False, "Error":str(e)})
+
+        
+
+def ApplyJobs(Role,identity,job_id,resume):
+    if (Role!="applicant"):
+        return ({"success":False, "Error":"Access denied"})
+    
+    try:
+        job=Job.query.get(job_id)
+
+        if (not job):
+            return ({"success":False, "message":"Job not found"})
+        
+        if (not resume):
+            return ({"success":False, "message":"Resume required"})
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename=secure_filename(f"{timestamp}_{resume.filename}")
+
+        uploads_folder="uploads"
+
+        os.makedirs(uploads_folder, exist_ok=True)
+
+        filepath=os.path.join(uploads_folder,filename)
+
+        resume.save(filepath)
+
+        new_application=Application(applicant_id=identity, job_id=job_id, resume_filename=filename)
+
+        db.session.add(new_application)
+        db.session.commit()
+
+        return({"success":True, "message":"successfully applied for the job"})
+    
+    except Exception as e:
+        db.session.rollback()
+
+        return ({"success":False, "Error":str(e)})
+    
+
+
+def Listjobs():
+    jobs=Job.query.all()
+
+    if not jobs:
+        return ({"success":False, "message":"There are no jobs available"})
+
+    jobslist=[]
+
+    for job in jobs:
+
+        jobslist.append({"job id": job.id, "Company Name": job.company_name, "Role": job.title, "description": job.description,
+                          "required skills": job.skills,"salary": job.salary, "job type": job.job_type, "location": job.location, "job posted time": job.created_at})
+    
+    return({"success":True, "jobs":jobslist})
+        
+    
+
+def ListAppliedJobs(Role, identity):
+    if (Role!="applicant"):
+        return ({"success":False, "Error":"Access denied"})
+    
+    application=Application.query.filter(Application.applicant_id==identity).all()
+
+    if not application:
+        return ({"success":False, "message":"Start applying for jobs"})
+    
+    ApplicationsList=[]
+    
+    for apps in application:
+
+        ApplicationsList.append({"applicant id":apps.applicant_id, "job id":apps.job_id, "resume filename":apps.resume_filename, "status":apps.status, "applied at":apps.applied_at})
+
+    return({"success":True, "Applied jobs":ApplicationsList})
+
+
+
+    
+
+def DeleteJob(Role, identity, title, company_name):
+
+    if Role not in ["recruiter", "admin"]:
+        return ({"success":False, "Error":"Access denied"})
+    
+    if (Role=="admin"):
+        job=Job.query.filter(Job.title==title,Job.company_name==company_name).first()
+
+        JOb=job
+
+        if(not JOb):
+          return ({"success":False, "Message":"Mentioned Job Not found"})
+
+        db.session.delete(JOb)
+        db.session.commit()
+
+        return({"success":True, "Selected job":title, "Message":"Has been successfully removed"})
+
+    if (Role=="recruiter"):
+
+        job=Job.query.filter(Job.recruiter_id==identity, Job.title==title, Job.company_name==company_name).first()
+
+        jOB=job
+
+        if(not jOB):
+            return ({"success":False, "Message":"Mentioned Job Not found"})
+        
+        db.session.delete(jOB)
+        db.session.commit()
+
+        return({"success":True, "Selected job":title, "Message":f"The vacancy for {title} Has been successfully removed"})
+    
+
+
+jobvalidators.py :
+
+def job_validation(data):
+
+    required_fields={"company_name":data.get("company_name"), "title":data.get("title"), "description":data.get("description"), "skills":data.get("skills"), "salary":data.get("salary"), "job_type":data.get("job_type"), "location":data.get("location")}
+
+    for field_name, value in required_fields.items():
+
+        if not value:
+            return {"success": False, "Error": f"{field_name} is required"}
+        
+    valid_job_types=["remote", "hybrid", "onsite"]
+
+    if(required_fields["job_type"] not in valid_job_types):
+        return ({"success":False, "Error":"Invalid job_type"})
+    
+    if(not isinstance(required_fields["salary"],(int,float))):
+        return ({"success":False, "Error":" salary should only be in integer "})
+    
+    if(required_fields["salary"]<0):
+        return({"success":False, "Error":"salary cant be less than zero"})
+    
+    return({"success":True})
+
+
+app.py :
+
+from routes.BackendFlask import app
+
+if (__name__ == "__main__"):
+    app.run(host="0.0.0.0", port=5000)
+
+dbapp.py :
+
+
+from routes.BackendFlask import app
+
+if (__name__ == "__main__"):
+    app.run(host="0.0.0.0", port=5000)
