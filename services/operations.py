@@ -3,6 +3,7 @@ from dbapp import db
 from datetime import datetime
 from models import Job, Application
 from werkzeug.utils import secure_filename
+from utils.s3uploads import upload_resume
 from validators.jobvalidator import job_validation
 
 def JobsCreation(company_name, title, description, skills, salary, job_type, location, identity, Role):
@@ -46,15 +47,9 @@ def ApplyJobs(Role,identity,job_id,resume):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename=secure_filename(f"{timestamp}_{resume.filename}")
 
-        uploads_folder="uploads"
+        resume_url = upload_resume(resume,filename)
 
-        os.makedirs(uploads_folder, exist_ok=True)
-
-        filepath=os.path.join(uploads_folder,filename)
-
-        resume.save(filepath)
-
-        new_application=Application(applicant_id=identity, job_id=job_id, resume_filename=filename)
+        new_application=Application(applicant_id=identity, job_id=job_id, resume_filename=resume_url)
 
         db.session.add(new_application)
         db.session.commit()
