@@ -1,4 +1,3 @@
-import os
 from dbapp import db
 from datetime import datetime
 from models import Job, Application

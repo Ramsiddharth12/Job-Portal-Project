@@ -13,4 +13,4 @@ def upload_resume(file, filename):
         filename
     )
 
-    return f"https://{bucket}.s3.amazonaws.com/{filename}"
+    return (f"https://{bucket}.s3.amazonaws.com/{filename}")
